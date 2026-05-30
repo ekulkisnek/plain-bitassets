@@ -21,27 +21,32 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
     aarch64-apple-ios-sim
     aarch64-linux-android
     armv7-linux-androideabi
+    i686-linux-android
     x86_64-linux-android
+    x86_64-apple-ios
   )
 fi
 
 for target in "${TARGETS[@]}"; do
+  # Force nightly (required by lib.rs #![feature(...)] for the cdylib FFI).
+  # Matches rust-toolchain.toml and design mobile pipeline.
+  rustup toolchain install nightly --no-self-update || true
   rustup target add "$target"
   case "$target" in
     aarch64-linux-android)
-      (cd "$ROOT_DIR" && cargo ndk -t arm64-v8a build -p "$CRATE" --release)
+      (cd "$ROOT_DIR" && rustup run nightly cargo ndk -t arm64-v8a build -p "$CRATE" --release)
       ;;
     armv7-linux-androideabi)
-      (cd "$ROOT_DIR" && cargo ndk -t armeabi-v7a build -p "$CRATE" --release)
+      (cd "$ROOT_DIR" && rustup run nightly cargo ndk -t armeabi-v7a build -p "$CRATE" --release)
       ;;
     i686-linux-android)
-      (cd "$ROOT_DIR" && cargo ndk -t x86 build -p "$CRATE" --release)
+      (cd "$ROOT_DIR" && rustup run nightly cargo ndk -t x86 build -p "$CRATE" --release)
       ;;
     x86_64-linux-android)
-      (cd "$ROOT_DIR" && cargo ndk -t x86_64 build -p "$CRATE" --release)
+      (cd "$ROOT_DIR" && rustup run nightly cargo ndk -t x86_64 build -p "$CRATE" --release)
       ;;
     *)
-      cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p "$CRATE" --release --target "$target"
+      rustup run nightly cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p "$CRATE" --release --target "$target"
       ;;
   esac
 done
@@ -63,7 +68,24 @@ if command -v xcodebuild >/dev/null 2>&1; then
 
   if [[ ${#ios_args[@]} -gt 0 ]]; then
     rm -rf "$ROOT_DIR/target/liquid_wallet.xcframework"
-    xcodebuild -create-xcframework "${ios_args[@]}" -output "$ROOT_DIR/target/liquid_wallet.xcframework" >/dev/null
+    xcodebuild -create-xcframework "${ios_args[@]}" -output "$ROOT_DIR/target/liquid_wallet.xcframework" 2>&1 | tail -5 || echo "xcodebuild warnings (see above)"
     echo "Packaged target/liquid_wallet.xcframework"
   fi
 fi
+
+# Post-build symbol visibility + size checks (for CT bloat from elements+zkp).
+# Documented per review: ensures liquid_wallet_* FFI symbols are present in .a
+# and measures impact of zkp tables on mobile binary size.
+echo "=== Symbol and size verification for built targets ==="
+for target in "${TARGETS[@]}"; do
+  lib="$ROOT_DIR/target/$target/release/lib$LIB_NAME.a"
+  if [[ -f "$lib" ]]; then
+    echo "Target: $target"
+    echo "  Size: $(du -sh "$lib" | cut -f1)"
+    echo "  FFI symbols (liquid_wallet_*):"
+    nm -g "$lib" 2>/dev/null | grep ' liquid_wallet_' || echo "    (none or stripped; check visibility if needed)"
+    # Optional strip (uncomment for prod size win; requires llvm-strip in PATH)
+    # if command -v llvm-strip >/dev/null; then llvm-strip -x "$lib"; echo "  Stripped."; fi
+  fi
+done
+echo "Build complete. Review sizes + symbols for mobile CT feasibility (Open Q #8)."

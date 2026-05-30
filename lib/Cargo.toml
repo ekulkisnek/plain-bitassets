@@ -78,6 +78,9 @@ features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 clap = ["dep:clap"]
 zmq = ["dep:zeromq"]
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true
 

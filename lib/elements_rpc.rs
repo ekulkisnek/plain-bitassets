@@ -3,7 +3,7 @@ use std::path::Path;
 use bitcoin::{Amount, Txid};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -82,13 +82,19 @@ pub struct ElementsRpc {
 
 impl ElementsRpc {
     /// Create a new client. Tries the provided datadir cookie first, then standard locations.
-    pub fn new(rpc_url: &str, elements_datadir: Option<&Path>) -> Result<Self, ElementsRpcError> {
+    pub fn new(
+        rpc_url: &str,
+        elements_datadir: Option<&Path>,
+    ) -> Result<Self, ElementsRpcError> {
         let cookie_paths = [
             elements_datadir.map(|d| d.join("regtest/.cookie")),
             elements_datadir.map(|d| d.join(".cookie")),
             dirs::home_dir().map(|h| h.join(".elements/regtest/.cookie")),
             dirs::home_dir().map(|h| h.join(".elements/.cookie")),
-            Some(Path::new("/tmp/liquid-id5-regtest/regtest/.cookie").to_path_buf()),
+            Some(
+                Path::new("/tmp/liquid-id5-regtest/regtest/.cookie")
+                    .to_path_buf(),
+            ),
         ];
 
         let mut auth_user = "__cookie__".to_string();
@@ -100,14 +106,19 @@ impl ElementsRpc {
                 if let Some((user, pass)) = content.split_once(':') {
                     auth_user = user.to_string();
                     auth_pass = pass.to_string();
-                    tracing::info!("Loaded elementsd RPC cookie from {}", path.display());
+                    tracing::info!(
+                        "Loaded elementsd RPC cookie from {}",
+                        path.display()
+                    );
                     break;
                 }
             }
         }
 
         if auth_pass.is_empty() {
-            tracing::warn!("No elementsd cookie found; RPC calls may fail if auth required");
+            tracing::warn!(
+                "No elementsd cookie found; RPC calls may fail if auth required"
+            );
         }
 
         let client = Client::builder()
@@ -144,9 +155,12 @@ impl ElementsRpc {
 
         let json: Value = resp.json().await?;
 
+        #[allow(clippy::collapsible_if)]
         if let Some(err) = json.get("error") {
             if !err.is_null() {
-                let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) as i32;
+                let code =
+                    err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1)
+                        as i32;
                 let msg = err
                     .get("message")
                     .and_then(|m| m.as_str())
