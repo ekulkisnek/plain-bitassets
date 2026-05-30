@@ -20,6 +20,7 @@ async-lock = { workspace = true }
 bech32 = { workspace = true }
 bincode = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
+elements = { workspace = true }
 blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
 byteorder = { workspace = true }
@@ -83,3 +84,4 @@ workspace = true
 [lib]
 name = "liquid_simplicity"
 path = "lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
