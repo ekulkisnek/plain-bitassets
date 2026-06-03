@@ -21,6 +21,7 @@ bech32 = { workspace = true }
 bincode = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
 elements = { workspace = true }
+elements-miniscript = "0.4.0"
 blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
 byteorder = { workspace = true }
@@ -39,7 +40,11 @@ heed = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 hex-literal = { workspace = true }
 itertools = { workspace = true }
+jni = "0.21"
 jsonrpsee = { workspace = true }
+lwk_common = { version = "0.17.0", default-features = false }
+lwk_signer = { version = "0.17.0", default-features = false }
+lwk_wollet = { version = "0.17.0", default-features = false, features = ["electrum"] }
 nonempty = { workspace = true, features = ["serialize"] }
 num = { workspace = true }
 parking_lot = { workspace = true }

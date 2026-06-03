@@ -2,8 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use fallible_iterator::FallibleIterator as _;
 use futures::{StreamExt as _, TryFutureExt as _};
-use parking_lot::RwLock;
 use liquid_simplicity::{
+    elements_rpc::ElementsRpc,
     miner::{self, Miner},
     node::{self, Node},
     types::{
@@ -15,8 +15,8 @@ use liquid_simplicity::{
         },
     },
     wallet::{self, Wallet},
-    elements_rpc::ElementsRpc,
 };
+use parking_lot::RwLock;
 use tokio::{spawn, sync::RwLock as TokioRwLock, task::JoinHandle};
 use tokio_util::task::LocalPoolHandle;
 use tonic_health::{
@@ -293,14 +293,22 @@ impl App {
 
         // Wire up Elements JSON-RPC for L-BTC wallet display (elementsd)
         let elements_rpc = {
-            let cookie_dir = Some(std::path::PathBuf::from("/tmp/liquid-id5-regtest"));
-            match ElementsRpc::new("http://127.0.0.1:18443", cookie_dir.as_deref()) {
+            let cookie_dir =
+                Some(std::path::PathBuf::from("/tmp/liquid-id5-regtest"));
+            match ElementsRpc::new(
+                "http://127.0.0.1:18443",
+                cookie_dir.as_deref(),
+            ) {
                 Ok(rpc) => {
-                    tracing::info!("Connected to elementsd RPC for L-BTC wallet data");
+                    tracing::info!(
+                        "Connected to elementsd RPC for L-BTC wallet data"
+                    );
                     Some(rpc)
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to init elementsd RPC client: {e:#}; L-BTC panels will be empty");
+                    tracing::warn!(
+                        "Failed to init elementsd RPC client: {e:#}; L-BTC panels will be empty"
+                    );
                     None
                 }
             }

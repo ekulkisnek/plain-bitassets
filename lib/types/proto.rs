@@ -130,137 +130,124 @@ pub mod sidechain {
 }
 
 impl common::ConsensusHex {
-        pub fn decode<Message, T>(
-            &self,
-            field_name: &str,
-        ) -> Result<T, Error>
-        where
-            Message: prost::Name,
-            T: bitcoin::consensus::Decodable,
-        {
-            let Self { hex } = self;
-            let hex = hex
-                .as_ref()
-                .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
-            bitcoin::consensus::encode::deserialize_hex(hex).map_err(|_err| {
-                Error::invalid_field_value::<Message>(field_name, hex)
-            })
-        }
-
-        /// Variant of [`Self::decode`] that returns a `tonic::Status` error
-        pub fn decode_tonic<Message, T>(
-            self,
-            field_name: &str,
-        ) -> Result<T, Box<tonic::Status>>
-        where
-            Message: prost::Name,
-            T: bitcoin::consensus::Decodable,
-        {
-            self.decode::<Message, _>(field_name).map_err(|err| {
-                Box::new(tonic::Status::from_error(Box::new(err)))
-            })
-        }
-
-        pub fn encode<T>(value: &T) -> Self
-        where
-            T: bitcoin::consensus::Encodable,
-        {
-            let hex = bitcoin::consensus::encode::serialize_hex(value);
-            Self { hex: Some(hex) }
-        }
+    pub fn decode<Message, T>(&self, field_name: &str) -> Result<T, Error>
+    where
+        Message: prost::Name,
+        T: bitcoin::consensus::Decodable,
+    {
+        let Self { hex } = self;
+        let hex = hex
+            .as_ref()
+            .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
+        bitcoin::consensus::encode::deserialize_hex(hex).map_err(|_err| {
+            Error::invalid_field_value::<Message>(field_name, hex)
+        })
     }
+
+    /// Variant of [`Self::decode`] that returns a `tonic::Status` error
+    pub fn decode_tonic<Message, T>(
+        self,
+        field_name: &str,
+    ) -> Result<T, Box<tonic::Status>>
+    where
+        Message: prost::Name,
+        T: bitcoin::consensus::Decodable,
+    {
+        self.decode::<Message, _>(field_name)
+            .map_err(|err| Box::new(tonic::Status::from_error(Box::new(err))))
+    }
+
+    pub fn encode<T>(value: &T) -> Self
+    where
+        T: bitcoin::consensus::Encodable,
+    {
+        let hex = bitcoin::consensus::encode::serialize_hex(value);
+        Self { hex: Some(hex) }
+    }
+}
 
 impl common::Hex {
-        pub fn decode_bytes<Message>(
-            self,
-            field_name: &str,
-        ) -> Result<Vec<u8>, Error>
-        where
-            Message: prost::Name,
-        {
-            let Self { hex } = self;
-            let hex =
-                hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
-            hex::decode(&hex).map_err(|_err| {
-                Error::invalid_field_value::<Message>(field_name, &hex)
-            })
-        }
-
-        pub fn decode<Message, T>(
-            self,
-            field_name: &str,
-        ) -> Result<T, Error>
-        where
-            Message: prost::Name,
-            T: borsh::BorshDeserialize,
-        {
-            let Self { hex } = self;
-            let hex =
-                hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
-            let bytes = hex::decode(&hex).map_err(|_err| {
-                Error::invalid_field_value::<Message>(field_name, &hex)
-            })?;
-            T::try_from_slice(&bytes).map_err(|_err| {
-                Error::invalid_field_value::<Message>(field_name, &hex)
-            })
-        }
-
-        pub fn encode<T>(value: &T) -> Self
-        where
-            T: hex::ToHex,
-        {
-            let hex = value.encode_hex();
-            Self { hex: Some(hex) }
-        }
+    pub fn decode_bytes<Message>(
+        self,
+        field_name: &str,
+    ) -> Result<Vec<u8>, Error>
+    where
+        Message: prost::Name,
+    {
+        let Self { hex } = self;
+        let hex = hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
+        hex::decode(&hex).map_err(|_err| {
+            Error::invalid_field_value::<Message>(field_name, &hex)
+        })
     }
+
+    pub fn decode<Message, T>(self, field_name: &str) -> Result<T, Error>
+    where
+        Message: prost::Name,
+        T: borsh::BorshDeserialize,
+    {
+        let Self { hex } = self;
+        let hex = hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
+        let bytes = hex::decode(&hex).map_err(|_err| {
+            Error::invalid_field_value::<Message>(field_name, &hex)
+        })?;
+        T::try_from_slice(&bytes).map_err(|_err| {
+            Error::invalid_field_value::<Message>(field_name, &hex)
+        })
+    }
+
+    pub fn encode<T>(value: &T) -> Self
+    where
+        T: hex::ToHex,
+    {
+        let hex = value.encode_hex();
+        Self { hex: Some(hex) }
+    }
+}
 
 impl common::ReverseHex {
-        pub fn decode<Message, T>(
-            &self,
-            field_name: &str,
-        ) -> Result<T, Error>
-        where
-            Message: prost::Name,
-            T: bitcoin::consensus::Decodable,
-        {
-            let Self { hex } = self;
-            let hex = hex
-                .as_ref()
-                .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
-            let mut bytes = hex::decode(hex).map_err(|_| {
-                Error::invalid_field_value::<Message>(field_name, hex)
-            })?;
-            bytes.reverse();
-            bitcoin::consensus::deserialize(&bytes).map_err(|_err| {
-                Error::invalid_field_value::<Message>(field_name, hex)
-            })
-        }
+    pub fn decode<Message, T>(&self, field_name: &str) -> Result<T, Error>
+    where
+        Message: prost::Name,
+        T: bitcoin::consensus::Decodable,
+    {
+        let Self { hex } = self;
+        let hex = hex
+            .as_ref()
+            .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
+        let mut bytes = hex::decode(hex).map_err(|_| {
+            Error::invalid_field_value::<Message>(field_name, hex)
+        })?;
+        bytes.reverse();
+        bitcoin::consensus::deserialize(&bytes).map_err(|_err| {
+            Error::invalid_field_value::<Message>(field_name, hex)
+        })
+    }
 
-        /// Variant of [`Self::decode`] that returns a `tonic::Status` error
-        pub fn decode_tonic<Message, T>(
-            self,
-            field_name: &str,
-        ) -> Result<T, Box<tonic::Status>>
-        where
-            Message: prost::Name,
-            T: bitcoin::consensus::Decodable,
-        {
-            self.decode::<Message, _>(field_name).map_err(|err| {
-                Box::new(tonic::Status::from_error(Box::new(err)))
-            })
-        }
+    /// Variant of [`Self::decode`] that returns a `tonic::Status` error
+    pub fn decode_tonic<Message, T>(
+        self,
+        field_name: &str,
+    ) -> Result<T, Box<tonic::Status>>
+    where
+        Message: prost::Name,
+        T: bitcoin::consensus::Decodable,
+    {
+        self.decode::<Message, _>(field_name)
+            .map_err(|err| Box::new(tonic::Status::from_error(Box::new(err))))
+    }
 
-        pub fn encode<T>(value: &T) -> Self
-        where
-            T: bitcoin::consensus::Encodable,
-        {
-            let mut bytes = bitcoin::consensus::encode::serialize(value);
-            bytes.reverse();
-            Self {
-                hex: Some(hex::encode(bytes)),
-            }
+    pub fn encode<T>(value: &T) -> Self
+    where
+        T: bitcoin::consensus::Encodable,
+    {
+        let mut bytes = bitcoin::consensus::encode::serialize(value);
+        bytes.reverse();
+        Self {
+            hex: Some(hex::encode(bytes)),
         }
     }
+}
 
 pub mod mainchain {
     use bitcoin::{
@@ -441,16 +428,13 @@ pub mod mainchain {
                 // It is wrong to assume that the address is valid UTF8.
                 // In the case that it is not valid UTF8, the deposit should be
                 // ignored.
-                let address_bytes: Vec<u8> =
-                    address
-                        .ok_or_else(|| {
-                            Error::missing_field::<
-                                generated::deposit::Output,
-                            >("address")
-                        })?
-                        .decode_bytes::<generated::deposit::Output>(
+                let address_bytes: Vec<u8> = address
+                    .ok_or_else(|| {
+                        Error::missing_field::<generated::deposit::Output>(
                             "address",
-                        )?;
+                        )
+                    })?
+                    .decode_bytes::<generated::deposit::Output>("address")?;
                 let address_utf8: &str =
                     match std::str::from_utf8(&address_bytes) {
                         Ok(address_str) => address_str,
@@ -521,9 +505,7 @@ pub mod mainchain {
                 output,
             } = deposit;
             let sequence_number = sequence_number.ok_or_else(|| {
-                Error::missing_field::<generated::Deposit>(
-                    "sequence_number",
-                )
+                Error::missing_field::<generated::Deposit>("sequence_number")
             })?;
             let Some(outpoint) = outpoint else {
                 return Err(Error::missing_field::<generated::Deposit>(
@@ -870,9 +852,7 @@ pub mod mainchain {
             let work = work
                 .as_ref()
                 .ok_or_else(|| {
-                    Error::missing_field::<generated::BlockHeaderInfo>(
-                        "work",
-                    )
+                    Error::missing_field::<generated::BlockHeaderInfo>("work")
                 })?
                 .decode::<generated::BlockHeaderInfo, _>("work")
                 .map(bitcoin::Work::from_le_bytes)?;
@@ -910,14 +890,18 @@ pub mod mainchain {
                         block_info,
                     } = connect_block;
                     let Some(header_info) = header_info else {
-                        return Err(Error::missing_field::<
-                            event::ConnectBlock,
-                        >("header_info"));
+                        return Err(
+                            Error::missing_field::<event::ConnectBlock>(
+                                "header_info",
+                            ),
+                        );
                     };
                     let Some(block_info) = block_info else {
-                        return Err(Error::missing_field::<
-                            event::ConnectBlock,
-                        >("block_info"));
+                        return Err(
+                            Error::missing_field::<event::ConnectBlock>(
+                                "block_info",
+                            ),
+                        );
                     };
                     Ok(Self::ConnectBlock {
                         header_info: (&header_info).try_into()?,
@@ -927,18 +911,15 @@ pub mod mainchain {
                 event::Event::DisconnectBlock(disconnect_block) => {
                     let event::DisconnectBlock { block_hash } =
                         disconnect_block;
-                    let block_hash =
-                        block_hash
-                            .ok_or_else(|| {
-                                Error::missing_field::<
-                                    event::DisconnectBlock,
-                                >(
-                                    "disconnect_block"
-                                )
-                            })?
-                            .decode::<event::DisconnectBlock, _>(
+                    let block_hash = block_hash
+                        .ok_or_else(|| {
+                            Error::missing_field::<event::DisconnectBlock>(
                                 "disconnect_block",
-                            )?;
+                            )
+                        })?
+                        .decode::<event::DisconnectBlock, _>(
+                            "disconnect_block",
+                        )?;
                     let block_hash = BlockHash::from_byte_array(block_hash);
                     Ok(Self::DisconnectBlock { block_hash })
                 }
@@ -1114,9 +1095,7 @@ pub mod mainchain {
             result.try_into()
         }
 
-        pub async fn get_chain_info(
-            &mut self,
-        ) -> Result<ChainInfo, Error> {
+        pub async fn get_chain_info(&mut self) -> Result<ChainInfo, Error> {
             let request = generated::GetChainInfoRequest {};
             let generated::GetChainInfoResponse { network } =
                 self.0.get_chain_info(request).await?.into_inner();
@@ -1167,8 +1146,7 @@ pub mod mainchain {
 
         pub async fn subscribe_events(
             &mut self,
-        ) -> Result<BoxStream<'_, Result<Event, Error>>, Error>
-        {
+        ) -> Result<BoxStream<'_, Result<Event, Error>>, Error> {
             let request = generated::SubscribeEventsRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
             };
@@ -1274,18 +1252,17 @@ pub mod mainchain {
 
         pub async fn create_new_address(
             &mut self,
-        ) -> Result<
-            bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-            Error,
-        > {
+        ) -> Result<bitcoin::Address<bitcoin::address::NetworkUnchecked>, Error>
+        {
             let request = generated::CreateNewAddressRequest {};
             let generated::CreateNewAddressResponse { address } =
                 self.0.create_new_address(request).await?.into_inner();
-            let address = address.parse().map_err(|_| {
-                Error::invalid_field_value::<
-                    generated::CreateNewAddressResponse,
-                >("address", &address)
-            })?;
+            let address =
+                address.parse().map_err(|_| {
+                    Error::invalid_field_value::<
+                        generated::CreateNewAddressResponse,
+                    >("address", &address)
+                })?;
             Ok(address)
         }
 

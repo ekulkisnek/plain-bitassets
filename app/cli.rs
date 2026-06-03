@@ -212,7 +212,10 @@ impl Cli {
             lite_wallet_quic_addr: self.lite_wallet_quic_addr,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
-            sidechain_grpc_addr: ipv4_socket_addr([127, 0, 0, 1], self.sidechain_grpc_port),
+            sidechain_grpc_addr: ipv4_socket_addr(
+                [127, 0, 0, 1],
+                self.sidechain_grpc_port,
+            ),
         })
     }
 }

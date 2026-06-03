@@ -99,6 +99,9 @@ pub enum LiteWalletQuicRequest {
         script_hashes: Vec<String>,
         from_block_hash: Option<String>,
     },
+    SubmitAuthorizedTransaction {
+        hex_borsh_authorized_tx: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -107,6 +110,7 @@ pub enum LiteWalletQuicResponse {
     Snapshot { update: LiteWalletUpdate },
     Mempool { update: LiteWalletUpdate },
     Confirmed { update: LiteWalletUpdate },
+    Submitted { txid: Txid },
     Error { message: String },
 }
 
@@ -391,7 +395,9 @@ impl RpcServerImpl {
                         liquid_simplicity::types::OutPoint::Coinbase {
                             ..
                         }
-                        | liquid_simplicity::types::OutPoint::Deposit(_) => None,
+                        | liquid_simplicity::types::OutPoint::Deposit(_) => {
+                            None
+                        }
                     })
                     .collect::<HashSet<_>>()
                 {
@@ -1248,7 +1254,8 @@ impl RpcServer for RpcServerImpl {
 
     async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
         let res =
-            <liquid_simplicity_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+            <liquid_simplicity_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi(
+            );
         Ok(res)
     }
 
@@ -1596,11 +1603,40 @@ async fn handle_lite_wallet_quic_connection(
             }
         };
 
-    let LiteWalletQuicRequest::Subscribe {
-        script_hashes,
-        from_block_hash,
-    } = request;
     let rpc = RpcServerImpl { app: app.clone() };
+    let (script_hashes, from_block_hash) = match request {
+        LiteWalletQuicRequest::Subscribe {
+            script_hashes,
+            from_block_hash,
+        } => (script_hashes, from_block_hash),
+        LiteWalletQuicRequest::SubmitAuthorizedTransaction {
+            hex_borsh_authorized_tx,
+        } => {
+            match rpc
+                .submit_authorized_transaction(hex_borsh_authorized_tx)
+                .await
+            {
+                Ok(txid) => {
+                    write_lite_wallet_quic_response(
+                        &mut send,
+                        &LiteWalletQuicResponse::Submitted { txid },
+                    )
+                    .await?;
+                }
+                Err(err) => {
+                    write_lite_wallet_quic_response(
+                        &mut send,
+                        &LiteWalletQuicResponse::Error {
+                            message: err.to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
+            send.finish()?;
+            return Ok(());
+        }
+    };
     let mut last_tip_hash = from_block_hash;
     match rpc.lite_wallet_update(script_hashes.clone(), last_tip_hash.clone()) {
         Ok(update) => {
@@ -1786,7 +1822,10 @@ mod tests {
 // Minimal but functional proxy to elementsd :18443 (regtest, ID5).
 // Uses the same curl+cookie pattern as the BMM panel for zero new deps.
 
-fn elements_rpc(method: &str, params_json: &str) -> Result<serde_json::Value, String> {
+fn elements_rpc(
+    method: &str,
+    params_json: &str,
+) -> Result<serde_json::Value, String> {
     let cookie = "__cookie__:b0e3e4ddc36861525be17bb9074d71ec5d7f66e92f6116f3c59038a5f4bccf39";
     let data = format!(
         r#"{{"jsonrpc":"1.0","id":"1","method":"{}","params":{}}}"#,
@@ -1804,10 +1843,14 @@ fn elements_rpc(method: &str, params_json: &str) -> Result<serde_json::Value, St
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!("curl failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "curl failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     let s = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&s).map_err(|e| e.to_string())?;
     if let Some(err) = v.get("error") {
         if !err.is_null() {
             return Err(format!("elementsd error: {err}"));
@@ -1850,8 +1893,13 @@ impl SidechainService for SidechainGrpcImpl {
         Ok(Response::new(SubmitTransactionResponse {}))
     }
 
-    type SubscribeEventsStream =
-        Pin<Box<dyn Stream<Item = Result<SubscribeEventsResponse, Status>> + Send + 'static>>;
+    type SubscribeEventsStream = Pin<
+        Box<
+            dyn Stream<Item = Result<SubscribeEventsResponse, Status>>
+                + Send
+                + 'static,
+        >,
+    >;
 
     async fn subscribe_events(
         &self,
@@ -1895,7 +1943,8 @@ pub async fn run_sidechain_grpc_server(
 ) -> anyhow::Result<()> {
     let svc = SidechainServiceServer::new(SidechainGrpcImpl::default());
     // Health service so clients can discover readiness
-    let (health_reporter, health_server) = tonic_health::server::health_reporter();
+    let (health_reporter, health_server) =
+        tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<SidechainServiceServer<SidechainGrpcImpl>>()
         .await;

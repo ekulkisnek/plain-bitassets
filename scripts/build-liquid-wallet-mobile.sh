@@ -15,6 +15,10 @@ CRATE="liquid_simplicity"
 LIB_NAME="liquid_simplicity"
 TARGETS=("$@")
 
+# Newer Apple SDK toolchains emit stack-check symbols that are unavailable when
+# Rust links the iOS staticlib with the historical default iOS 10 target.
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-13.0}"
+
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
   TARGETS=(
     aarch64-apple-ios

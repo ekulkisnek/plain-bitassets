@@ -77,7 +77,7 @@ impl TxBuilder {
                     ui.monospace_selectable_singleline(
                         true,
                         format!(
-                            "BitAsset Control {}",
+                            "Asset Control {}",
                             hex::encode(bitasset_control_id.0)
                         ),
                     );
@@ -88,7 +88,7 @@ impl TxBuilder {
                 for (bitasset_id, value) in bitasset_values_in {
                     ui.monospace_selectable_singleline(
                         true,
-                        format!("BitAsset {}", hex::encode(bitasset_id.0)),
+                        format!("Asset {}", hex::encode(bitasset_id.0)),
                     );
                     ui.monospace_selectable_singleline(
                         false,
@@ -159,10 +159,10 @@ impl TxBuilder {
                             ("Bitcoin", bitcoin_value)
                         }
                         AssetOutputContent::BitAsset(value) => {
-                            ("BitAsset", format!("{value}"))
+                            ("Asset", format!("{value}"))
                         }
                         AssetOutputContent::BitAssetControl => {
-                            ("BitAsset Control", "1".to_owned())
+                            ("Asset Control", "1".to_owned())
                         }
                     };
                     ui.monospace_selectable_singleline(false, asset_kind);

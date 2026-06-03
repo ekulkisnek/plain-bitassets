@@ -11,8 +11,8 @@ use hex::FromHex;
 use liquid_simplicity::{
     state::AmmPair,
     types::{
-        AssetId, BitAssetData, DutchAuctionId, EncryptionPubKey, Hash,
-        Transaction, Txid, VerifyingKey,
+        AssetId, BitAssetData, EncryptionPubKey, Hash, Transaction, Txid,
+        VerifyingKey,
     },
 };
 
@@ -39,24 +39,6 @@ pub struct TrySetBitAssetData {
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: TrySetOption<VerifyingKey>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct DutchAuctionParams {
-    /// Block height at which the auction starts
-    start_block: String,
-    /// Auction duration, in blocks
-    duration: String,
-    /// The asset to be auctioned
-    base_asset: String,
-    /// The amount of the base asset to be auctioned
-    base_amount: String,
-    /// The asset in which the auction is to be quoted
-    quote_asset: String,
-    /// Initial price
-    initial_price: String,
-    /// Final price
-    final_price: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -95,9 +77,9 @@ pub struct DexSwap {
 pub enum TxType {
     #[default]
     Regular,
-    #[strum(to_string = "Register BitAsset")]
+    #[strum(to_string = "Register Asset")]
     BitAssetRegistration(BitAssetRegistration),
-    #[strum(to_string = "Reserve BitAsset")]
+    #[strum(to_string = "Reserve Asset")]
     BitAssetReservation { plaintext_name: String },
     #[strum(to_string = "DEX (Burn Position)")]
     DexBurn(DexBurn),
@@ -105,15 +87,6 @@ pub enum TxType {
     DexMint(DexMint),
     #[strum(to_string = "DEX (Swap)")]
     DexSwap(DexSwap),
-    #[strum(to_string = "Dutch Auction (Bid)")]
-    DutchAuctionBid {
-        auction_id: String,
-        bid_size: String,
-    },
-    #[strum(to_string = "Dutch Auction (Collect)")]
-    DutchAuctionCollect { auction_id: String },
-    #[strum(to_string = "Dutch Auction (Create)")]
-    DutchAuctionCreate { auction_params: DutchAuctionParams },
 }
 
 #[derive(Debug, Default)]
@@ -323,116 +296,6 @@ impl TxCreator {
         Ok(tx)
     }
 
-    fn set_dutch_auction_bid(
-        app: &App,
-        mut tx: Transaction,
-        auction_id: &str,
-        bid_size: &str,
-    ) -> anyhow::Result<Transaction> {
-        let auction_id: DutchAuctionId = borsh_deserialize_hex(auction_id)
-            .map_err(|err| {
-                anyhow::anyhow!("Failed to parse auction ID: {err}")
-            })?;
-        let bid_size = u64::from_str(bid_size).map_err(|err| {
-            anyhow::anyhow!("Failed to parse bid size: {err}")
-        })?;
-        let height = app
-            .node
-            .try_get_tip_height()?
-            .ok_or_else(|| anyhow::anyhow!("No tip"))?;
-        let auction_state = app
-            .node
-            .get_dutch_auction_state(auction_id)
-            .map_err(anyhow::Error::new)?;
-        let next_auction_state = auction_state
-            .bid(Txid::default(), bid_size, height)
-            .map_err(anyhow::Error::new)?;
-        let receive_quantity =
-            auction_state.base_amount_remaining.latest().data
-                - next_auction_state.base_amount_remaining.latest().data;
-        let () = app.wallet.dutch_auction_bid(
-            &mut tx,
-            auction_id,
-            auction_state.base_asset,
-            auction_state.quote_asset,
-            bid_size,
-            receive_quantity,
-        )?;
-        Ok(tx)
-    }
-
-    fn set_dutch_auction_collect(
-        app: &App,
-        mut tx: Transaction,
-        auction_id: &str,
-    ) -> anyhow::Result<Transaction> {
-        let auction_id: DutchAuctionId = borsh_deserialize_hex(auction_id)
-            .map_err(|err| {
-                anyhow::anyhow!("Failed to parse auction ID: {err}")
-            })?;
-        let auction_state = app
-            .node
-            .get_dutch_auction_state(auction_id)
-            .map_err(anyhow::Error::new)?;
-        let () = app.wallet.dutch_auction_collect(
-            &mut tx,
-            auction_id,
-            auction_state.base_asset,
-            auction_state.quote_asset,
-            auction_state.base_amount_remaining.latest().data,
-            auction_state.quote_amount.latest().data,
-        )?;
-        Ok(tx)
-    }
-
-    fn set_dutch_auction_create(
-        app: &App,
-        mut tx: Transaction,
-        auction_params: &DutchAuctionParams,
-    ) -> anyhow::Result<Transaction> {
-        let start_block =
-            u32::from_str(&auction_params.start_block).map_err(|err| {
-                anyhow::anyhow!("Failed to parse start block: {err}")
-            })?;
-        let duration =
-            u32::from_str(&auction_params.duration).map_err(|err| {
-                anyhow::anyhow!("Failed to parse duration: {err}")
-            })?;
-        let base_asset: AssetId = borsh_deserialize_hex(
-            &auction_params.base_asset,
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to parse base asset: {err}"))?;
-        let base_amount =
-            u64::from_str(&auction_params.base_amount).map_err(|err| {
-                anyhow::anyhow!("Failed to parse base amount: {err}")
-            })?;
-        let quote_asset: AssetId = borsh_deserialize_hex(
-            &auction_params.quote_asset,
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to parse quote asset: {err}"))?;
-        let initial_price = u64::from_str(&auction_params.initial_price)
-            .map_err(|err| {
-                anyhow::anyhow!("Failed to parse initial price: {err}")
-            })?;
-        let final_price =
-            u64::from_str(&auction_params.final_price).map_err(|err| {
-                anyhow::anyhow!("Failed to parse final price: {err}")
-            })?;
-        let dutch_auction_params = liquid_simplicity::types::DutchAuctionParams {
-            start_block,
-            duration,
-            base_asset,
-            base_amount,
-            quote_asset,
-            initial_price,
-            final_price,
-        };
-        let () = app
-            .wallet
-            .dutch_auction_create(&mut tx, dutch_auction_params)?;
-        Ok(tx)
-    }
-
     // set tx data for the current transaction
     fn set_tx_data(
         &self,
@@ -452,16 +315,6 @@ impl TxCreator {
             TxType::DexBurn(dex_burn) => Self::set_dex_burn(app, tx, dex_burn),
             TxType::DexMint(dex_mint) => Self::set_dex_mint(app, tx, dex_mint),
             TxType::DexSwap(dex_swap) => Self::set_dex_swap(app, tx, dex_swap),
-            TxType::DutchAuctionBid {
-                auction_id,
-                bid_size,
-            } => Self::set_dutch_auction_bid(app, tx, auction_id, bid_size),
-            TxType::DutchAuctionCollect { auction_id } => {
-                Self::set_dutch_auction_collect(app, tx, auction_id)
-            }
-            TxType::DutchAuctionCreate { auction_params } => {
-                Self::set_dutch_auction_create(app, tx, auction_params)
-            }
         }
     }
 
@@ -527,7 +380,7 @@ impl TxCreator {
         }
     }
 
-    pub(in crate::gui) fn show_bitasset_options(
+    pub(in crate::gui) fn show_asset_options(
         ui: &mut egui::Ui,
         bitasset_data: &mut TrySetBitAssetData,
     ) -> Response {
@@ -596,7 +449,7 @@ impl TxCreator {
             | signing_pubkey_resp.join()
     }
 
-    fn show_bitasset_registration(
+    fn show_asset_registration(
         ui: &mut egui::Ui,
         bitasset_registration: &mut BitAssetRegistration,
     ) -> Option<Response> {
@@ -610,7 +463,7 @@ impl TxCreator {
             &mut bitasset_registration.initial_supply,
             "Initial Supply",
         );
-        let bitasset_options_resp = Self::show_bitasset_options(
+        let bitasset_options_resp = Self::show_asset_options(
             ui,
             bitasset_registration.bitasset_data.as_mut(),
         );
@@ -620,7 +473,7 @@ impl TxCreator {
         Some(resp)
     }
 
-    fn show_bitasset_reservation(
+    fn show_asset_reservation(
         ui: &mut egui::Ui,
         plaintext_name: &mut dyn TextBuffer,
     ) -> Option<Response> {
@@ -679,48 +532,6 @@ impl TxCreator {
         )
     }
 
-    fn show_dutch_auction_bid<'a>(
-        ui: &mut egui::Ui,
-        auction_id: &'a mut dyn TextBuffer,
-        bid_size: &'a mut dyn TextBuffer,
-    ) -> Option<Response> {
-        show_monospace_single_line_inputs(
-            ui,
-            [(auction_id, "Auction ID"), (bid_size, "Bid Size")],
-        )
-    }
-
-    fn show_dutch_auction_collect(
-        ui: &mut egui::Ui,
-        auction_id: &mut dyn TextBuffer,
-    ) -> Option<Response> {
-        let auction_id_resp =
-            show_monospace_single_line_input(ui, auction_id, "Auction ID");
-        let resp = auction_id_resp.join();
-        Some(resp)
-    }
-
-    fn show_dutch_auction_create(
-        ui: &mut egui::Ui,
-        auction_params: &mut DutchAuctionParams,
-    ) -> Option<Response> {
-        show_monospace_single_line_inputs(
-            ui,
-            [
-                (
-                    &mut auction_params.start_block as &mut dyn TextBuffer,
-                    "Start Block",
-                ),
-                (&mut auction_params.duration, "Duration"),
-                (&mut auction_params.base_asset, "Base Asset"),
-                (&mut auction_params.base_amount, "Base Amount"),
-                (&mut auction_params.quote_asset, "Quote Asset"),
-                (&mut auction_params.initial_price, "Initial Price"),
-                (&mut auction_params.final_price, "Final Price"),
-            ],
-        )
-    }
-
     pub fn show(
         &mut self,
         app: Option<&App>,
@@ -750,24 +561,14 @@ impl TxCreator {
         let tx_data_ui = match &mut self.tx_type {
             TxType::Regular => None,
             TxType::BitAssetRegistration(bitasset_registration) => {
-                Self::show_bitasset_registration(ui, bitasset_registration)
+                Self::show_asset_registration(ui, bitasset_registration)
             }
             TxType::BitAssetReservation { plaintext_name } => {
-                Self::show_bitasset_reservation(ui, plaintext_name)
+                Self::show_asset_reservation(ui, plaintext_name)
             }
             TxType::DexBurn(dex_burn) => Self::show_dex_burn(ui, dex_burn),
             TxType::DexMint(dex_mint) => Self::show_dex_mint(ui, dex_mint),
             TxType::DexSwap(dex_swap) => Self::show_dex_swap(ui, dex_swap),
-            TxType::DutchAuctionBid {
-                auction_id,
-                bid_size,
-            } => Self::show_dutch_auction_bid(ui, auction_id, bid_size),
-            TxType::DutchAuctionCollect { auction_id } => {
-                Self::show_dutch_auction_collect(ui, auction_id)
-            }
-            TxType::DutchAuctionCreate { auction_params } => {
-                Self::show_dutch_auction_create(ui, auction_params)
-            }
         };
         let tx_data_changed = tx_data_ui.is_some_and(|resp| resp.changed());
         // if base txid has changed, store the new txid

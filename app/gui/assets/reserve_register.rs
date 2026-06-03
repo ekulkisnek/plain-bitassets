@@ -8,7 +8,7 @@ use crate::{
     gui::{coins::tx_creator, util::UiExt},
 };
 
-fn reserve_bitasset(
+fn reserve_asset(
     app: &App,
     plaintext_name: &str,
     fee: bitcoin::Amount,
@@ -18,7 +18,7 @@ fn reserve_bitasset(
     app.sign_and_send(tx).map_err(anyhow::Error::from)
 }
 
-fn register_bitasset(
+fn register_asset(
     app: &App,
     plaintext_name: &str,
     initial_supply: u64,
@@ -74,7 +74,7 @@ impl Reserve {
             )
             .clicked()
         {
-            if let Err(err) = reserve_bitasset(
+            if let Err(err) = reserve_asset(
                 app.unwrap(),
                 &self.plaintext_name,
                 fee.expect("should not happen"),
@@ -132,10 +132,7 @@ impl Register {
             &self.fee,
             bitcoin::Denomination::Bitcoin,
         );
-        tx_creator::TxCreator::show_bitasset_options(
-            ui,
-            &mut self.bitasset_data,
-        );
+        tx_creator::TxCreator::show_asset_options(ui, &mut self.bitasset_data);
         let bitasset_data: Result<BitAssetData, _> =
             self.bitasset_data.clone().try_into();
         if let Err(err) = &bitasset_data {
@@ -152,7 +149,7 @@ impl Register {
             )
             .clicked()
         {
-            if let Err(err) = register_bitasset(
+            if let Err(err) = register_asset(
                 app.unwrap(),
                 &self.plaintext_name,
                 initial_supply.expect("should not happen"),

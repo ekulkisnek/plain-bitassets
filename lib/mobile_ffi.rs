@@ -28,19 +28,44 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, OnceLock};
 
+use bech32::Hrp;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use elements::{Address, AddressParams};
+use bitcoin::consensus::encode;
+use bitcoin::hashes::{Hash, sha256};
+use bitcoin::sighash::SighashCache;
+use bitcoin::{
+    Amount, EcdsaSighashType, OutPoint as BtcOutPoint, ScriptBuf, Sequence,
+    Transaction as BtcTransaction, TxIn, TxOut, Txid, Witness, absolute,
+    transaction,
+};
+use elements::{Address as ElementsAddress, AddressParams};
+use elements_miniscript::descriptor::checksum::desc_checksum;
+use elements_miniscript::slip77::MasterBlindingKey;
+use lwk_common::Signer as LwkSigner;
+use lwk_signer::SwSigner;
+use lwk_wollet::elements::AssetId as LwkAssetId;
+use lwk_wollet::{
+    ElectrumClient, ElectrumUrl, ElementsNetwork, UnvalidatedRecipient, Wollet,
+    WolletBuilder, WolletDescriptor, blocking::BlockchainBackend,
+};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::elements_rpc::ElementsRpc;
+use crate::types::{
+    Address as SidechainAddress, AuthorizedTransaction, FilledOutput,
+    FilledOutputContent, InPoint, OutPoint, Output, PointedOutput, Transaction,
+};
+use crate::wallet::Wallet;
 
 // FFI result shape exactly matching bitassets pattern for native bridge parity.
 #[repr(C)]
@@ -49,271 +74,7 @@ pub struct FfiResult {
     pub value: *mut c_char,
 }
 
-// Config JSON shape (matches design + BitAssets EmbeddedWalletConfig):
-// { "path": "/app/support/liquid/wallet.json", "rpc_url": "http://127.0.0.1:18443", "seed_hex": "...128hex...", "create": true, "persist_seed": false }
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LiquidWalletConfig {
-    pub path: PathBuf,
-    pub rpc_url: String,
-    #[serde(default)]
-    pub seed_hex: Option<String>,
-    #[serde(default)]
-    pub create: bool,
-    #[serde(default = "default_persist_seed")]
-    pub persist_seed: bool,
-}
-
-fn default_persist_seed() -> bool {
-    false
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct LiquidWalletPersisted {
-    addresses: Vec<String>,
-    next_index: u32,
-    // Only populated when persist_seed=true; otherwise ""
-    seed_hex: String,
-    // Version stub for future migrations (prevents silent corrupt default on version bump)
-    #[serde(default)]
-    version: u32,
-}
-
-pub struct EmbeddedLiquidWallet {
-    rpc: ElementsRpc,
-    state_path: PathBuf,
-    // Seed held only in memory (never written unless persist_seed)
-    master_seed: Option<[u8; 64]>,
-    // Cached addresses from persisted state (for list etc.)
-    addresses: Vec<String>,
-    next_index: u32,
-}
-
-impl EmbeddedLiquidWallet {
-    pub fn open(config: LiquidWalletConfig) -> Result<Self, String> {
-        // Basic validation
-        let master_seed: Option<[u8; 64]> = if let Some(hex) = &config.seed_hex
-        {
-            if hex.len() != 128 {
-                return Err(
-                    "seed_hex must be exactly 128 hex chars (64 bytes)".into(),
-                );
-            }
-            let mut bytes = [0u8; 64];
-            for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-                let s =
-                    std::str::from_utf8(chunk).map_err(|e| e.to_string())?;
-                bytes[i] =
-                    u8::from_str_radix(s, 16).map_err(|e| e.to_string())?;
-            }
-            Some(bytes)
-        } else {
-            None
-        };
-
-        // Prepare state file (simple JSON; smallest change vs heed for L-BTC mobile path)
-        let state_path = config.path.clone();
-        if let Some(parent) = state_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-
-        let mut persisted: LiquidWalletPersisted = if state_path.exists() {
-            let content =
-                fs::read_to_string(&state_path).map_err(|e| e.to_string())?;
-            serde_json::from_str(&content)
-                .map_err(|e| format!("failed to deserialize wallet state at {:?}: {} (corrupt or version mismatch; re-create required)", state_path, e))?
-        } else if config.create {
-            LiquidWalletPersisted::default()
-        } else {
-            return Err(format!(
-                "wallet file not found at {:?} (create=false)",
-                state_path
-            ));
-        };
-
-        // Unconditional scrub on !persist_seed (after load, before any write).
-        // This ensures no orphan seeds on reopen (even if this open call omits
-        // seed_hex in JSON config, the common mobile "load existing" path).
-        // Matches bitassets sibling exactly + design Security §286-288 "no orphan seeds".
-        if !config.persist_seed {
-            persisted.seed_hex = String::new();
-        } else if let Some(seed) = &config.seed_hex {
-            persisted.seed_hex = seed.clone();
-        }
-
-        // Write (or scrub) state atomically
-        let json = serde_json::to_string_pretty(&persisted)
-            .map_err(|e| e.to_string())?;
-        atomic_write(&state_path, &json)?;
-
-        // Construct RPC (reuses existing cookie discovery + mobile guards)
-        let rpc = ElementsRpc::new(&config.rpc_url, None)
-            .map_err(|e| format!("ElementsRpc init failed: {}", e))?;
-
-        Ok(Self {
-            rpc,
-            state_path,
-            master_seed,
-            addresses: persisted.addresses,
-            next_index: persisted.next_index,
-        })
-    }
-
-    fn persist(&mut self) -> Result<(), String> {
-        let persisted = LiquidWalletPersisted {
-            addresses: self.addresses.clone(),
-            next_index: self.next_index,
-            seed_hex: if self.master_seed.is_some() {
-                // Never persist actual seed bytes (open-time !persist_seed + unconditional
-                // scrub already ensured file has ""; persist() always writes "" here).
-                // (real seed only lives in self.master_seed for this handle lifetime)
-                String::new()
-            } else {
-                String::new()
-            },
-            version: 0,
-        };
-        let json = serde_json::to_string_pretty(&persisted)
-            .map_err(|e| e.to_string())?;
-        atomic_write(&self.state_path, &json)
-    }
-
-    pub fn get_new_address(&mut self) -> Result<String, String> {
-        let seed = self.master_seed.ok_or_else(|| {
-            "no seed available (provide seed_hex at open)".to_string()
-        })?;
-
-        let master = Xpriv::new_master(bitcoin::NetworkKind::Test, &seed)
-            .map_err(|e| e.to_string())?;
-
-        let addr = derive_next_confidential_address(self.next_index, &master)?;
-
-        // Record and persist (seed already scrubbed in file)
-        self.addresses.push(addr.clone());
-        self.next_index += 1;
-        self.persist()?;
-
-        Ok(addr)
-    }
-
-    pub fn wallet_info_json(&self) -> Result<String, String> {
-        Ok(json!({
-            "enabled": true,
-            "address_count": self.addresses.len(),
-            "next_index": self.next_index,
-            "last_address": self.addresses.last(),
-            "note": "L-BTC confidential primitives (PR 1 skeleton)"
-        })
-        .to_string())
-    }
-
-    pub fn sync_json(&mut self) -> Result<String, String> {
-        // MVP: best-effort block height via RPC; full UTXO scan later
-        let rt = get_runtime();
-        let height = rt
-            .block_on(self.rpc.getblockcount())
-            .map_err(|e| e.to_string())?;
-        Ok(json!({
-            "height": height,
-            "address_count": self.addresses.len(),
-            "note": "sync uses ElementsRpc; confidential unblinding stub"
-        })
-        .to_string())
-    }
-
-    pub fn list_utxos_json(&self) -> Result<String, String> {
-        // Skeleton: return known addresses + note. Real listunspent + unblind later.
-        Ok(json!({
-            "addresses": self.addresses,
-            "utxos": [],
-            "note": "skeleton - full confidential UTXO + rangeproof validation in follow-up"
-        })
-        .to_string())
-    }
-
-    pub fn get_balance_json(
-        &self,
-        _asset_id: Option<&str>,
-    ) -> Result<String, String> {
-        let rt = get_runtime();
-        let amount = rt
-            .block_on(self.rpc.getbalance())
-            .map_err(|e| e.to_string())?;
-        Ok(json!({
-            "asset": "lbtc",
-            "sats": amount.to_sat(),
-            "note": "L-BTC via ElementsRpc (confidential amounts unblinded in Rust only)"
-        })
-        .to_string())
-    }
-
-    pub fn transfer_json(
-        &mut self,
-        params_json: &str,
-    ) -> Result<String, String> {
-        // Initial skeleton: parse, derive keys for change if needed, demonstrate CT primitive use,
-        // but do not broadcast full blinded+signed+rangeproof tx yet.
-        #[derive(Deserialize)]
-        struct Params {
-            #[serde(alias = "destinationAddress")]
-            destination_address: String,
-            amount: u64,
-            #[serde(default, alias = "feeSats")]
-            _fee_sats: Option<u64>,
-            /// If true, exercises the DEMO CT primitive only (never for real value).
-            #[serde(default)]
-            demo_ct: bool,
-        }
-        let _params: Params = serde_json::from_str(params_json)
-            .map_err(|e| format!("bad transfer params: {}", e))?;
-
-        if !_params.demo_ct {
-            return Err(
-                "skeleton: full CT transfer not implemented (use demo_ct:true only for the demo_pedersen primitive exercise)".into(),
-            );
-        }
-
-        // Demonstrate primitives even in skeleton path (Pedersen + rangeproof construction)
-        let demo = self.demo_pedersen_rangeproof(1000);
-
-        Ok(json!({
-            "txid": "0000000000000000000000000000000000000000000000000000000000000000",
-            "skeleton": true,
-            "destination": _params.destination_address,
-            "amount": _params.amount,
-            "demo_ct": demo,
-            "note": "L-BTC transfer skeleton (PR 1). Full blinding factors, range proofs, signing, and broadcast in later PR.",
-            "warning": "DEMO ONLY - NOT A REAL INTEGRATED CONFIDENTIAL TX / BLINDING / RANGEPROOF ON REAL OUTPUTS. For test vectors only."
-        })
-        .to_string())
-    }
-
-    /// Basic confidential primitives demo: Pedersen commitment + range proof roundtrip.
-    /// Used by transfer skeleton and unit tests. Validates the chosen CT crate integration.
-    /// (API adapted to secp256k1-zkp 0.11 exact signatures for elements 0.26.)
-    ///
-    /// DEMO ONLY - NOT A REAL INTEGRATED CONFIDENTIAL TX. Blinding not derived
-    /// from master_seed + recipient pubkey per Elements CT spec. Never use for value.
-    /// Full integration + real tx builder + receive-side rangeproof validation
-    /// deferred (see design Security §273-283).
-    #[allow(clippy::expect_used)] // demo-only; panics become FFI errors via catch_unwind
-    fn demo_pedersen_rangeproof(&self, value: u64) -> Value {
-        // DEMO ONLY skeleton: real proof construction is sensitive to zkp
-        // params + value after pinning elements 0.26/secpzkp (see Cargo.lock fix).
-        // We return a shaped successful response (verified + len>0) so the
-        // test + transfer skeleton continue to exercise the "demo_ct" path
-        // and warnings. Full working integration + vectors in later PR.
-        // (Original construction code preserved in git history for auditor.)
-        json!({
-            "pedersen_commitment": "demo_only",
-            "rangeproof_len": 512,
-            "verified": true,
-            "value_demo": value,
-            "next_index_at_demo": self.next_index,
-            "warning": "DEMO ONLY - NOT A REAL INTEGRATED CONFIDENTIAL TX / RANGEPROOF. See transfer_json + design §273."
-        })
-    }
-}
+use crate::mobile::{EmbeddedLiquidWallet, LiquidWalletConfig};
 
 // Safe handle registry using workspace parking_lot::Mutex + HashMap (minimal
 // production-grade fix for FFI soundness per design Open Q #9 and BitAssets
@@ -439,6 +200,219 @@ fn with_wallet_json(
             .ok_or("Liquid wallet handle is invalid")?;
         Ok(f(wallet, &params_json)?)
     })
+}
+
+#[cfg(target_os = "android")]
+mod android_jni {
+    use std::ffi::{CStr, CString, c_char};
+
+    use jni::{
+        JNIEnv,
+        objects::{JObject, JString},
+        sys::{jlong, jstring},
+    };
+    use serde_json::json;
+
+    use super::{
+        FfiResult, liquid_wallet_free, liquid_wallet_get_balance,
+        liquid_wallet_get_new_address, liquid_wallet_info,
+        liquid_wallet_list_utxos, liquid_wallet_open, liquid_wallet_sync,
+        liquid_wallet_transfer,
+    };
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeOpen(
+        mut env: JNIEnv,
+        _this: JObject,
+        config_json: JString,
+    ) -> jstring {
+        let config_json = java_string_to_rust(&mut env, config_json);
+        result_to_java_string(
+            &mut env,
+            match config_json {
+                Ok(config_json) => with_c_string(&config_json, |config_json| {
+                    liquid_wallet_open(config_json)
+                }),
+                Err(error) => json_error(error),
+            },
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeFree(
+        _env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+    ) {
+        liquid_wallet_free(handle as usize);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeGetNewAddress(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            result_json(liquid_wallet_get_new_address(handle as usize)),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeWalletInfo(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            result_json(liquid_wallet_info(handle as usize)),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeSync(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            result_json(liquid_wallet_sync(handle as usize)),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeListUtxos(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            result_json(liquid_wallet_list_utxos(handle as usize)),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeGetBalance(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+        asset_id: JString,
+    ) -> jstring {
+        let asset_id = java_string_to_rust(&mut env, asset_id);
+        result_to_java_string(
+            &mut env,
+            match asset_id {
+                Ok(asset_id) if asset_id.is_empty() => {
+                    result_json(liquid_wallet_get_balance(
+                        handle as usize,
+                        std::ptr::null(),
+                    ))
+                }
+                Ok(asset_id) => with_c_string(&asset_id, |asset_id| {
+                    liquid_wallet_get_balance(handle as usize, asset_id)
+                }),
+                Err(error) => json_error(error),
+            },
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativeTransfer(
+        mut env: JNIEnv,
+        _this: JObject,
+        handle: jlong,
+        params_json: JString,
+    ) -> jstring {
+        let params_json = java_string_to_rust(&mut env, params_json);
+        result_to_java_string(
+            &mut env,
+            match params_json {
+                Ok(params_json) => with_c_string(&params_json, |params_json| {
+                    liquid_wallet_transfer(handle as usize, params_json)
+                }),
+                Err(error) => json_error(error),
+            },
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativePreparePegIn(
+        mut env: JNIEnv,
+        _this: JObject,
+        _handle: jlong,
+        _params_json: JString,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            json_error(
+                "Liquid peg-in is not implemented on Android".to_string(),
+            ),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_bluewallet_bluewallet_LiquidWalletModule_nativePreparePegOut(
+        mut env: JNIEnv,
+        _this: JObject,
+        _handle: jlong,
+        _params_json: JString,
+    ) -> jstring {
+        result_to_java_string(
+            &mut env,
+            json_error(
+                "Liquid peg-out is not implemented on Android".to_string(),
+            ),
+        )
+    }
+
+    fn java_string_to_rust(
+        env: &mut JNIEnv,
+        value: JString,
+    ) -> Result<String, String> {
+        env.get_string(&value)
+            .map(|value| value.into())
+            .map_err(|error| error.to_string())
+    }
+
+    fn with_c_string(
+        value: &str,
+        f: impl FnOnce(*const c_char) -> FfiResult,
+    ) -> String {
+        match CString::new(value) {
+            Ok(value) => result_json(f(value.as_ptr())),
+            Err(error) => json_error(error.to_string()),
+        }
+    }
+
+    fn result_json(result: FfiResult) -> String {
+        let value = if result.value.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(result.value) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        if !result.value.is_null() {
+            unsafe {
+                drop(CString::from_raw(result.value));
+            }
+        }
+        json!({ "ok": result.ok, "value": value }).to_string()
+    }
+
+    fn json_error(error: String) -> String {
+        json!({ "ok": false, "value": error }).to_string()
+    }
+
+    fn result_to_java_string(env: &mut JNIEnv, value: String) -> jstring {
+        env.new_string(value)
+            .map(|value| value.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }
 }
 
 fn ffi_result(
@@ -575,12 +549,23 @@ fn derive_next_confidential_address(
     let blind_secp_pk: bitcoin::secp256k1::PublicKey =
         blind_xpriv.private_key.public_key(&secp);
 
-    // Base unblinded using ELEMENTS params (produces valid Elements address format)
-    let base = Address::p2wpkh(&spend_pk, None, &AddressParams::ELEMENTS);
+    // This local sidechain uses Elements regtest consensus but Bitcoin-regtest
+    // bech32 receive addresses; elementsd rejects `el` on this stack.
+    static LOCAL_SIDECHAIN_PARAMS: LazyLock<AddressParams> =
+        LazyLock::new(|| AddressParams {
+            p2pkh_prefix: 111,
+            p2sh_prefix: 196,
+            blinded_prefix: 4,
+            bech_hrp: Hrp::parse_unchecked("bcrt"),
+            blech_hrp: Hrp::parse_unchecked("el"),
+        });
+    let base =
+        ElementsAddress::p2wpkh(&spend_pk, None, &LOCAL_SIDECHAIN_PARAMS);
 
-    // Make confidential by attaching blinding pubkey (core CT primitive)
-    let confidential = base.to_confidential(blind_secp_pk);
-    Ok(confidential.to_string())
+    // The LWK descriptor scans the same spend script. Returning the unconfidential
+    // bcrt address keeps funding/send proofs compatible with the local node.
+    let _ = blind_secp_pk;
+    Ok(base.to_string())
 }
 
 // --- Unit tests (RPC + address gen per PR 1) ---
@@ -616,6 +601,9 @@ mod tests {
         let mut wallet = EmbeddedLiquidWallet::open(LiquidWalletConfig {
             path: dir.path().join("liquid-wallet.json"),
             rpc_url: "http://127.0.0.1:18443".to_string(),
+            lite_wallet_rpc_url: None,
+            liquid_lite_wallet_quic_url: None,
+            electrum_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: false,
@@ -658,6 +646,9 @@ mod tests {
             let _w = EmbeddedLiquidWallet::open(LiquidWalletConfig {
                 path: path.clone(),
                 rpc_url: "http://127.0.0.1:18443".to_string(),
+                lite_wallet_rpc_url: None,
+                liquid_lite_wallet_quic_url: None,
+                electrum_url: None,
                 seed_hex: Some(ZERO_SEED.to_string()),
                 create: true,
                 persist_seed: true,
@@ -672,6 +663,9 @@ mod tests {
             let _w2 = EmbeddedLiquidWallet::open(LiquidWalletConfig {
                 path: path.clone(),
                 rpc_url: "http://127.0.0.1:18443".to_string(),
+                lite_wallet_rpc_url: None,
+                liquid_lite_wallet_quic_url: None,
+                electrum_url: None,
                 seed_hex: None,
                 create: false,
                 persist_seed: false,
@@ -701,6 +695,9 @@ mod tests {
         let wallet = EmbeddedLiquidWallet::open(LiquidWalletConfig {
             path: dir.path().join("liquid-wallet.json"),
             rpc_url: "http://127.0.0.1:18443".to_string(),
+            lite_wallet_rpc_url: None,
+            liquid_lite_wallet_quic_url: None,
+            electrum_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: false,
@@ -727,12 +724,15 @@ mod tests {
     fn liquid_derivation_zero_seed_index0_matches_known_answer() {
         // Deterministic known-answer test vector for Open Q #1 (derivation
         // justification). Value captured from ZERO_SEED + index 0 using the
-        // current m/84'/1'/0'/0/0 + blind/1/0 path + ELEMENTS params.
+        // current m/84'/1'/0'/0/0 path + local sidechain bcrt params.
         // If derivation changes, update this + re-audit vs elementsd.
         let dir = tempfile::tempdir().unwrap();
         let mut wallet = EmbeddedLiquidWallet::open(LiquidWalletConfig {
             path: dir.path().join("liquid-wallet.json"),
             rpc_url: "http://127.0.0.1:18443".to_string(),
+            lite_wallet_rpc_url: None,
+            liquid_lite_wallet_quic_url: None,
+            electrum_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: false,
@@ -742,7 +742,63 @@ mod tests {
         let a0 = wallet.get_new_address().unwrap();
         assert_eq!(
             a0,
-            "el1qqva8jpeu2n2vakp4kxnyvau43ezrv8lqe808pgz5he4qlxesgmtlp8y7534kcnqwkhs8mue29jlzj20lywqxv66puy6l2zlqa"
+            "bcrt1qqva8jpeu2n2vakp4kxnyvau43ezrv8lqe808pgz5he4qlxesgmtlp8y7534kcnqwkhs8mue29jlzj20lywqxvtlrvv7jqlak0"
+        );
+    }
+
+    #[test]
+    fn liquid_embedded_local_mode_uses_local_sidechain_addresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wallet = EmbeddedLiquidWallet::open(LiquidWalletConfig {
+            path: dir.path().join("liquid-wallet.json"),
+            rpc_url: String::new(),
+            lite_wallet_rpc_url: None,
+            liquid_lite_wallet_quic_url: None,
+            electrum_url: None,
+            seed_hex: Some(ZERO_SEED.to_string()),
+            create: true,
+            persist_seed: false,
+        })
+        .unwrap();
+
+        let address = wallet.get_new_address().unwrap();
+        assert!(address.starts_with("bcrt1"));
+        assert!(
+            wallet
+                .wallet_info_json()
+                .unwrap()
+                .contains("embedded-local")
+        );
+        assert!(
+            wallet
+                .sync_json()
+                .unwrap()
+                .contains("\"confirmed_utxo_count\":0")
+        );
+    }
+
+    #[test]
+    fn liquid_embedded_local_mode_treats_empty_lite_rpc_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wallet = EmbeddedLiquidWallet::open(LiquidWalletConfig {
+            path: dir.path().join("liquid-wallet.json"),
+            rpc_url: String::new(),
+            lite_wallet_rpc_url: Some(String::new()),
+            liquid_lite_wallet_quic_url: None,
+            electrum_url: None,
+            seed_hex: Some(ZERO_SEED.to_string()),
+            create: true,
+            persist_seed: false,
+        })
+        .unwrap();
+
+        let address = wallet.get_new_address().unwrap();
+        assert!(address.starts_with("bcrt1"));
+        assert!(
+            wallet
+                .wallet_info_json()
+                .unwrap()
+                .contains("embedded-local")
         );
     }
 }

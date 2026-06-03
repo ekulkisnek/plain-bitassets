@@ -33,7 +33,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const VALIDATOR_PROTO: &str =
         "../proto/proto/cusf/mainchain/v1/validator.proto";
     const WALLET_PROTO: &str = "../proto/proto/cusf/mainchain/v1/wallet.proto";
-    const SIDECHAIN_PROTO: &str = "../proto/proto/cusf/sidechain/v1/sidechain.proto";
+    const SIDECHAIN_PROTO: &str =
+        "../proto/proto/cusf/sidechain/v1/sidechain.proto";
     const ALL_PROTOS: &[&str] =
         &[COMMON_PROTO, VALIDATOR_PROTO, WALLET_PROTO, SIDECHAIN_PROTO];
     const INCLUDES: &[&str] = &["../proto/proto"];

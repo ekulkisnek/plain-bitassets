@@ -162,6 +162,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes-gcm-siv"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae0784134ba9375416d469ec31e7c5f9fa94405049cf08c5ce5b4698be673e0d"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "polyval",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -694,7 +709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b59a3f7fbe678874fa34354097644a171276e02a49934c13b3d61c54610ddf39"
 dependencies = [
  "bdk_core",
- "electrum-client",
+ "electrum-client 0.24.1",
 ]
 
 [[package]]
@@ -850,6 +865,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
  "bitcoin_hashes 0.14.1",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
 ]
@@ -1112,6 +1129,12 @@ dependencies = [
  "futures-lite",
  "piper",
 ]
+
+[[package]]
+name = "bmp-monochrome"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "829a082bd3761fde7476dc2ed85ca56c11628948460ece621e4f56fef5046567"
 
 [[package]]
 name = "borsh"
@@ -2003,6 +2026,23 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "electrum-client"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a0bd443023f9f5c4b7153053721939accc7113cbdf810a024434eed454b3db1"
+dependencies = [
+ "bitcoin",
+ "byteorder",
+ "libc",
+ "log",
+ "rustls",
+ "serde",
+ "serde_json",
+ "webpki-roots 0.25.4",
+ "winapi",
+]
+
+[[package]]
+name = "electrum-client"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5059f13888a90486e7268bbce59b175f5f76b1c55e5b9c568ceaa42d2b8507c"
@@ -2021,6 +2061,19 @@ dependencies = [
 
 [[package]]
 name = "elements"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81b2569d3495bfdfce36c504fd4d78752ff4a7699f8a33e6f3ee523bddf9f6ad"
+dependencies = [
+ "bech32",
+ "bitcoin",
+ "secp256k1-zkp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "elements"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d562b364c5d2aced40b01b3f73fc968311787e6813957593d4ffa94cd8733e3"
@@ -2030,6 +2083,18 @@ dependencies = [
  "secp256k1-zkp",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "elements-miniscript"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "571fa105690f83c7833df2109eb2e14ca0e62d633d2624ffcb166ff18a3da870"
+dependencies = [
+ "bitcoin",
+ "elements 0.25.2",
+ "miniscript",
+ "serde",
 ]
 
 [[package]]
@@ -2582,6 +2647,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fxhash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
@@ -4120,7 +4194,8 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "educe",
- "elements",
+ "elements 0.26.1",
+ "elements-miniscript",
  "error-fatality",
  "fallible-iterator",
  "fraction",
@@ -4131,8 +4206,12 @@ dependencies = [
  "hex 0.4.3",
  "hex-literal",
  "itertools 0.14.0",
+ "jni",
  "jsonrpsee 0.25.1",
  "libes",
+ "lwk_common",
+ "lwk_signer",
+ "lwk_wollet",
  "nonempty 0.11.0",
  "num",
  "parking_lot",
@@ -4367,6 +4446,69 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lwk_common"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2c72efef1d108bbfeb135d0b6617729165532533d362ae4c9c93b2699b5132b"
+dependencies = [
+ "aes-gcm-siv",
+ "base64 0.21.7",
+ "elements 0.25.2",
+ "elements-miniscript",
+ "getrandom 0.2.17",
+ "qr_code",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lwk_signer"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb785cdac68415571632ebc28eba718180d4b47839e37f4b48e0e3d159ad5a5b"
+dependencies = [
+ "base64 0.21.7",
+ "bip39",
+ "elements-miniscript",
+ "lwk_common",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lwk_wollet"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b9fa3bfd61ee241a0deea4395dfa6392e52b79f9961e919eb35bd32137c53cf"
+dependencies = [
+ "aes-gcm-siv",
+ "base64 0.21.7",
+ "bip39",
+ "electrum-client 0.21.0",
+ "elements 0.25.2",
+ "elements 0.26.1",
+ "elements-miniscript",
+ "futures",
+ "fxhash",
+ "idna",
+ "js-sys",
+ "log",
+ "lwk_common",
+ "once_cell",
+ "rand 0.8.6",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "macro_rules_attribute"
@@ -5736,6 +5878,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qr_code"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43d2564aae5faaf3acb512b35b8bcb9a298d9d8c72d181c598691d800ee78a00"
+dependencies = [
+ "bmp-monochrome",
+]
+
+[[package]]
 name = "quanta"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6046,6 +6197,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"

@@ -37,8 +37,7 @@ impl Miner {
         self.live.mainchain_tip = Some(
             app.runtime
                 .block_on(
-                    app.node
-                        .with_cusf_mainchain(|c| c.get_chain_tip().boxed()),
+                    app.node.with_cusf_mainchain(|c| c.get_chain_tip().boxed()),
                 )
                 .map_err(anyhow::Error::from),
         );
@@ -142,7 +141,10 @@ impl Miner {
             let running = self.running.load(atomic::Ordering::SeqCst);
             if let Some(app) = app {
                 if ui
-                    .add_enabled(!running, Button::new("Mine / Request BMM Block"))
+                    .add_enabled(
+                        !running,
+                        Button::new("Mine / Request BMM Block"),
+                    )
                     .clicked()
                 {
                     self.running.store(true, atomic::Ordering::SeqCst);

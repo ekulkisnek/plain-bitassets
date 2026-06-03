@@ -9,19 +9,19 @@ type KnownNameReservation = (Txid, Hash, String);
 type UnknownNameReservation = (Txid, Hash);
 
 #[derive(Debug, Default)]
-pub struct MyBitAssets;
+pub struct MyAssets;
 
-impl MyBitAssets {
-    /// Returns BitAsset reservations with known and unknown names
-    fn get_bitasset_reservations(
+impl MyAssets {
+    /// Returns asset reservations with known and unknown names
+    fn get_asset_reservations(
         app: &App,
     ) -> (Vec<KnownNameReservation>, Vec<UnknownNameReservation>) {
         let utxos_read = app.utxos.read();
-        // all bitasset reservations
+        // all asset reservations
         let bitasset_reservations = utxos_read
             .values()
             .filter_map(FilledOutput::reservation_data);
-        // split into bitasset reservations for which the names are known,
+        // split into asset reservations for which the names are known,
         // or unknown
         let (
             mut known_name_bitasset_reservations,
@@ -31,7 +31,7 @@ impl MyBitAssets {
                 let plain_bitasset = app
                     .wallet
                     .get_bitasset_reservation_plaintext(commitment)
-                    .expect("failed to retrieve bitasset reservation data");
+                    .expect("failed to retrieve asset reservation data");
                 match plain_bitasset {
                     Some(plain_bitasset) => {
                         Either::Left((*txid, *commitment, plain_bitasset))
@@ -39,13 +39,13 @@ impl MyBitAssets {
                     None => Either::Right((*txid, *commitment)),
                 }
             });
-        // sort name-known bitasset reservations by plain name
+        // sort name-known asset reservations by plain name
         known_name_bitasset_reservations.sort_by(
             |(_, _, plain_name_l), (_, _, plain_name_r)| {
                 plain_name_l.cmp(plain_name_r)
             },
         );
-        // sort name-unknown bitasset reservations by txid
+        // sort name-unknown asset reservations by txid
         unknown_name_bitasset_reservations.sort_by_key(|(txid, _)| *txid);
         (
             known_name_bitasset_reservations,
@@ -57,13 +57,13 @@ impl MyBitAssets {
         let (
             known_name_bitasset_reservations,
             unknown_name_bitasset_reservations,
-        ) = app.map(Self::get_bitasset_reservations).unwrap_or_default();
-        let _response = egui::SidePanel::left("My BitAsset Reservations")
+        ) = app.map(Self::get_asset_reservations).unwrap_or_default();
+        let _response = egui::SidePanel::left("My Asset Reservations")
             .exact_width(350.)
             .resizable(false)
             .show_inside(ui, move |ui| {
-                ui.heading("BitAsset Reservations");
-                egui::Grid::new("My BitAsset Reservations")
+                ui.heading("Asset Reservations");
+                egui::Grid::new("My Asset Reservations")
                     .num_columns(1)
                     .striped(true)
                     .show(ui, |ui| {
@@ -109,14 +109,12 @@ impl MyBitAssets {
             });
     }
 
-    /// Returns BitAssets with known and unknown names
-    fn get_bitassets(
-        app: &App,
-    ) -> (Vec<(BitAssetId, String)>, Vec<BitAssetId>) {
+    /// Returns Assets with known and unknown names
+    fn get_assets(app: &App) -> (Vec<(BitAssetId, String)>, Vec<BitAssetId>) {
         let utxos_read = app.utxos.read();
-        // all owned bitassets
+        // all owned assets
         let bitassets = utxos_read.values().filter_map(FilledOutput::bitasset);
-        // split into bitassets for which the names are known or unknown
+        // split into assets for which the names are known or unknown
         let (mut known_name_bitassets, mut unknown_name_bitassets): (
             Vec<_>,
             Vec<_>,
@@ -124,7 +122,7 @@ impl MyBitAssets {
             let plain_bitasset = app
                 .wallet
                 .get_bitasset_plaintext(bitasset)
-                .expect("failed to retrieve bitasset data");
+                .expect("failed to retrieve asset data");
             match plain_bitasset {
                 Some(plain_bitasset) => {
                     Either::Left((*bitasset, plain_bitasset))
@@ -132,28 +130,50 @@ impl MyBitAssets {
                 None => Either::Right(*bitasset),
             }
         });
-        // sort name-known bitassets by plain name
+        // sort name-known assets by plain name
         known_name_bitassets.sort_by(|(_, plain_name_l), (_, plain_name_r)| {
             plain_name_l.cmp(plain_name_r)
         });
-        // sort name-unknown bitassets by bitasset value
+        // sort name-unknown assets by asset value
         unknown_name_bitassets.sort();
         (known_name_bitassets, unknown_name_bitassets)
     }
 
-    pub fn show_bitassets(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+    pub fn show_assets(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let (known_name_bitassets, unknown_name_bitassets) =
-            app.map(Self::get_bitassets).unwrap_or_default();
-        egui::SidePanel::left("My BitAssets")
+            app.map(Self::get_assets).unwrap_or_default();
+        let balances = app
+            .map(|app| {
+                let utxos_read = app.utxos.read();
+                let mut balances =
+                    std::collections::HashMap::<BitAssetId, u64>::new();
+                for output in utxos_read.values() {
+                    if let Some((
+                        liquid_simplicity::types::AssetId::BitAsset(
+                            bitasset_id,
+                        ),
+                        value,
+                    )) = output.asset_value()
+                    {
+                        *balances.entry(bitasset_id).or_default() += value;
+                    }
+                }
+                balances
+            })
+            .unwrap_or_default();
+
+        egui::SidePanel::left("My Assets")
             .exact_width(350.)
             .resizable(false)
             .show_inside(ui, |ui| {
-                ui.heading("BitAssets");
-                egui::Grid::new("My BitAssets")
+                ui.heading("Assets");
+                egui::Grid::new("My Assets")
                     .striped(true)
                     .num_columns(1)
                     .show(ui, |ui| {
                         for (bitasset, plaintext_name) in known_name_bitassets {
+                            let balance =
+                                balances.get(&bitasset).copied().unwrap_or(0);
                             ui.vertical(|ui| {
                                 ui.monospace_selectable_singleline(
                                     true,
@@ -162,21 +182,33 @@ impl MyBitAssets {
                                 ui.monospace_selectable_singleline(
                                     false,
                                     format!(
-                                        "bitasset: {}",
+                                        "Asset ID: {}",
                                         hex::encode(bitasset.0)
                                     ),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("Balance: {balance} units"),
                                 );
                             });
                             ui.end_row()
                         }
                         for bitasset in unknown_name_bitassets {
-                            ui.monospace_selectable_singleline(
-                                false,
-                                format!(
-                                    "bitasset: {}",
-                                    hex::encode(bitasset.0)
-                                ),
-                            );
+                            let balance =
+                                balances.get(&bitasset).copied().unwrap_or(0);
+                            ui.vertical(|ui| {
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!(
+                                        "Asset ID: {}",
+                                        hex::encode(bitasset.0)
+                                    ),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("Balance: {balance} units"),
+                                );
+                            });
                             ui.end_row()
                         }
                     });
@@ -185,6 +217,6 @@ impl MyBitAssets {
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let _reservations_response = self.show_reservations(app, ui);
-        let _bitassets_response = self.show_bitassets(app, ui);
+        let _bitassets_response = self.show_assets(app, ui);
     }
 }

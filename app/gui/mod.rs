@@ -7,6 +7,7 @@ use strum::{EnumIter, IntoEnumIterator};
 use crate::{app::App, line_buffer::LineBuffer, util::PromiseStream};
 
 mod activity;
+mod assets;
 mod coins;
 mod console_logs;
 mod fonts;
@@ -17,6 +18,7 @@ mod simplicity;
 mod util;
 
 use activity::Activity;
+use assets::Assets;
 use coins::Coins;
 use console_logs::ConsoleLogs;
 use fonts::FONT_DEFINITIONS;
@@ -155,6 +157,7 @@ impl BottomPanel {
 pub struct EguiApp {
     activity: Activity,
     app: Option<App>,
+    assets: Assets,
     bottom_panel: BottomPanel,
     coins: Coins,
     console_logs: ConsoleLogs,
@@ -172,6 +175,8 @@ enum Tab {
     ParentChain,
     #[strum(to_string = "Coins")]
     Coins,
+    #[strum(to_string = "Assets")]
+    Assets,
     #[strum(to_string = "BMM")]
     Bmm,
     #[strum(to_string = "Simplicity")]
@@ -219,6 +224,7 @@ impl EguiApp {
         Self {
             activity,
             app,
+            assets: Assets::default(),
             bottom_panel,
             coins,
             console_logs,
@@ -263,6 +269,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::Coins => {
                     let () = self.coins.show(self.app.as_ref(), ui).unwrap();
+                }
+                Tab::Assets => {
+                    self.assets.show(self.app.as_ref(), ui);
                 }
                 Tab::Bmm => {
                     self.miner.show(self.app.as_ref(), ui);

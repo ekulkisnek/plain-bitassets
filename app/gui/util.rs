@@ -1,5 +1,3 @@
-
-
 use borsh::BorshDeserialize;
 use eframe::egui::{self, Color32, InnerResponse, Response, Ui};
 

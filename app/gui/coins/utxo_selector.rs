@@ -18,8 +18,9 @@ use crate::{
 pub enum AssetKind {
     #[default]
     Bitcoin,
+    #[strum(serialize = "Asset")]
     BitAsset,
-    #[strum(serialize = "BitAsset Control")]
+    #[strum(serialize = "Asset Control")]
     BitAssetControl,
 }
 
@@ -316,7 +317,7 @@ pub fn show_unconfirmed_utxo(
         }
         Some(AssetOutputContent::BitAsset(value)) => {
             if show_asset_id {
-                ui.monospace_selectable_singleline(true, "BitAsset");
+                ui.monospace_selectable_singleline(true, "Asset");
             }
             ui.monospace_selectable_singleline(
                 false,
@@ -325,7 +326,7 @@ pub fn show_unconfirmed_utxo(
         }
         Some(AssetOutputContent::BitAssetControl) => {
             if show_asset_id {
-                ui.monospace_selectable_singleline(true, "BitAsset Control");
+                ui.monospace_selectable_singleline(true, "Asset Control");
             }
             ui.monospace_selectable_singleline(false, "1 (unconfirmed)");
         }

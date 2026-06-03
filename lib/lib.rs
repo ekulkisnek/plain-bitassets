@@ -8,6 +8,7 @@ pub mod authorization;
 pub mod elements_rpc;
 pub mod mempool;
 pub mod miner;
+pub mod mobile;
 pub mod mobile_ffi;
 pub mod net;
 pub mod node;

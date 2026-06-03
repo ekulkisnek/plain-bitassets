@@ -3,14 +3,14 @@ use strum::{EnumIter, IntoEnumIterator};
 
 use crate::{app::App, gui::util::UiExt};
 
-mod my_bitassets;
+mod my_assets;
 mod transfer_receive;
 mod tx_builder;
 pub(super) mod tx_creator;
 mod utxo_creator;
 mod utxo_selector;
 
-use my_bitassets::MyBitAssets;
+use my_assets::MyAssets;
 use transfer_receive::TransferReceive;
 use tx_builder::TxBuilder;
 
@@ -21,12 +21,12 @@ enum Tab {
     TransferReceive,
     #[strum(to_string = "Transaction Builder")]
     TransactionBuilder,
-    #[strum(to_string = "My BitAssets")]
-    MyBitAssets,
+    #[strum(to_string = "My Assets")]
+    MyAssets,
 }
 
 pub struct Coins {
-    my_bitassets: MyBitAssets,
+    my_assets: MyAssets,
     tab: Tab,
     transfer_receive: TransferReceive,
     tx_builder: TxBuilder,
@@ -35,7 +35,7 @@ pub struct Coins {
 impl Coins {
     pub fn new(app: Option<&App>) -> Self {
         Self {
-            my_bitassets: MyBitAssets,
+            my_assets: MyAssets,
             tab: Tab::default(),
             transfer_receive: TransferReceive::new(app),
             tx_builder: TxBuilder::default(),
@@ -121,8 +121,8 @@ impl Coins {
             Tab::TransactionBuilder => {
                 let () = self.tx_builder.show(app, ui).unwrap();
             }
-            Tab::MyBitAssets => {
-                self.my_bitassets.show(app, ui);
+            Tab::MyAssets => {
+                self.my_assets.show(app, ui);
             }
         });
         Ok(())

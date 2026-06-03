@@ -13,11 +13,11 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-pub(super) struct AllBitAssets {
+pub(super) struct AllAssets {
     query: String,
 }
 
-fn show_bitasset_data(
+fn show_asset_data(
     ui: &mut egui::Ui,
     bitasset_data: &BitAssetData,
 ) -> egui::Response {
@@ -78,7 +78,7 @@ fn show_bitasset_data(
         .join()
 }
 
-fn show_bitasset_with_data(
+fn show_asset_with_data(
     ui: &mut egui::Ui,
     bitasset_id: &BitAssetId,
     bitasset_data: &BitAssetData,
@@ -86,15 +86,15 @@ fn show_bitasset_with_data(
     ui.horizontal(|ui| {
         ui.monospace_selectable_singleline(
             true,
-            format!("BitAsset ID: {}", hex::encode(bitasset_id.0)),
+            format!("Asset ID: {}", hex::encode(bitasset_id.0)),
         )
     })
     .join()
-        | show_bitasset_data(ui, bitasset_data)
+        | show_asset_data(ui, bitasset_data)
 }
 
-impl AllBitAssets {
-    fn show_bitassets(
+impl AllAssets {
+    fn show_assets(
         &mut self,
         ui: &mut egui::Ui,
         bitassets: Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>,
@@ -118,22 +118,18 @@ impl AllBitAssets {
             bitassets
                 .into_iter()
                 .for_each(|(bitasset_id, bitasset_data)| {
-                    show_bitasset_with_data(ui, &bitasset_id, &bitasset_data);
+                    show_asset_with_data(ui, &bitasset_id, &bitasset_data);
                 })
         } else {
             let name_hash = blake3::hash(self.query.as_bytes()).into();
             let name_hash_pattern = BitAssetId(name_hash);
             if let Some(bitasset_data) = bitassets.get(&name_hash_pattern) {
-                show_bitasset_with_data(ui, &name_hash_pattern, bitasset_data);
+                show_asset_with_data(ui, &name_hash_pattern, bitasset_data);
             };
             if let Ok(bitasset_id_pattern) = BitAssetId::from_hex(&self.query)
                 && let Some(bitasset_data) = bitassets.get(&bitasset_id_pattern)
             {
-                show_bitasset_with_data(
-                    ui,
-                    &bitasset_id_pattern,
-                    bitasset_data,
-                );
+                show_asset_with_data(ui, &bitasset_id_pattern, bitasset_data);
             };
             if let Ok(bitasset_seq_id_pattern) =
                 self.query.parse().map(BitAssetSeqId)
@@ -141,7 +137,7 @@ impl AllBitAssets {
                     seq_id_to_bitasset_id.get(&bitasset_seq_id_pattern)
             {
                 let bitasset_data = &bitassets[bitasset_id];
-                show_bitasset_with_data(ui, bitasset_id, bitasset_data);
+                show_asset_with_data(ui, bitasset_id, bitasset_data);
             }
         }
     }
@@ -156,7 +152,7 @@ impl AllBitAssets {
                     let err = anyhow::Error::from(node_err);
                     ui.monospace_selectable_multiline(format!("{err:#}"));
                 }
-                Ok(bitassets) => self.show_bitassets(ui, bitassets),
+                Ok(bitassets) => self.show_assets(ui, bitassets),
             }
         });
     }
