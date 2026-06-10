@@ -1,9 +1,12 @@
 use std::{
-    borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr,
-    time::Duration,
+    borrow::Cow,
+    cmp::Ordering,
+    collections::HashSet,
+    net::{IpAddr, SocketAddr},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bitcoin::Amount;
+use bitcoin::{Amount, hashes::Hash as _};
 use fraction::Fraction;
 use futures::StreamExt as _;
 use jsonrpsee::{
@@ -13,22 +16,23 @@ use jsonrpsee::{
 };
 use serde::{Deserialize, Serialize};
 
-use plain_bitassets::{
+use sidechain_utilities::{
     authorization::{self, Dst, Signature},
     net::{self, Peer},
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
         BitAssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, OutPoint,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, Network, OutPoint,
         PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
         keys::Ecies,
     },
     wallet::Balance,
 };
 use plain_bitassets_app_rpc_api::{
-    LiteWalletProofRef, LiteWalletUpdate, LiteWalletUtreexoProof, RpcServer,
-    TxInfo, TxProof,
+    FLORESTA_UTREEXO_ANCHOR_SERVICES, FlorestaUtreexoAnchor,
+    FlorestaUtreexoPeerSource, LiteWalletProofRef, LiteWalletUpdate,
+    LiteWalletUtreexoProof, RpcServer, TxInfo, TxProof,
 };
 use rustreexo::{
     node_hash::BitcoinNodeHash,
@@ -43,6 +47,16 @@ use tower_http::{
     trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
+use futures::stream::{self, Stream};
+use std::pin::Pin;
+use tonic::{Request, Response, Status};
+
+use sidechain_utilities::types::proto::sidechain::generated::{
+    self as sidechain,
+    sidechain_service_server::{SidechainService, SidechainServiceServer},
+    *,
+};
+
 use crate::app::App;
 
 fn custom_err_msg(err_msg: impl Into<String>) -> ErrorObject<'static> {
@@ -55,6 +69,23 @@ where
 {
     let error = anyhow::Error::from(error);
     custom_err_msg(format!("{error:#}"))
+}
+
+fn unix_time_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn ensure_private_signet(network: Network) -> RpcResult<()> {
+    if network == Network::Signet {
+        Ok(())
+    } else {
+        Err(custom_err_msg(format!(
+            "private signet Utreexo anchors are only available on signet; node is running {network:?}"
+        )))
+    }
 }
 
 pub struct RpcServerImpl {
@@ -132,6 +163,14 @@ fn ensure_lite_wallet_cursor_on_active_chain(
         None => Err(custom_err_msg(format!(
             "from_block_hash {from_block_hash} height is no longer available on the active sidechain; resync from snapshot"
         ))),
+    }
+}
+
+fn advertised_addr(bind_addr: SocketAddr, fallback_ip: IpAddr) -> SocketAddr {
+    if bind_addr.ip().is_unspecified() {
+        SocketAddr::new(fallback_ip, bind_addr.port())
+    } else {
+        bind_addr
     }
 }
 
@@ -345,14 +384,14 @@ impl RpcServerImpl {
                 for txid in confirmed_watched_utxos
                     .keys()
                     .filter_map(|outpoint| match outpoint {
-                        plain_bitassets::types::OutPoint::Regular {
+                        sidechain_utilities::types::OutPoint::Regular {
                             txid,
                             vout: _,
                         } => Some(*txid),
-                        plain_bitassets::types::OutPoint::Coinbase {
+                        sidechain_utilities::types::OutPoint::Coinbase {
                             ..
                         }
-                        | plain_bitassets::types::OutPoint::Deposit(_) => None,
+                        | sidechain_utilities::types::OutPoint::Deposit(_) => None,
                     })
                     .collect::<HashSet<_>>()
                 {
@@ -437,7 +476,7 @@ impl RpcServerImpl {
                                     &output.address,
                                 )) {
                                     created_utxos.push(PointedOutput {
-                                        outpoint: plain_bitassets::types::OutPoint::Regular {
+                                        outpoint: sidechain_utilities::types::OutPoint::Regular {
                                             txid,
                                             vout: vout as u32,
                                         },
@@ -885,7 +924,7 @@ impl RpcServer for RpcServerImpl {
 
     async fn get_bmm_inclusions(
         &self,
-        block_hash: plain_bitassets::types::BlockHash,
+        block_hash: sidechain_utilities::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>> {
         self.app
             .node
@@ -1075,6 +1114,78 @@ impl RpcServer for RpcServerImpl {
     async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
         let peers = self.app.node.get_active_peers();
         Ok(peers)
+    }
+
+    async fn private_signet_utreexo_anchors(
+        &self,
+        peers: Vec<SocketAddr>,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>> {
+        ensure_private_signet(self.app.node.network())?;
+        let now = unix_time_secs();
+        Ok(peers
+            .into_iter()
+            .map(|peer| FlorestaUtreexoAnchor::from_socket_addr(peer, now))
+            .collect())
+    }
+
+    async fn private_signet_active_utreexo_anchors(
+        &self,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>> {
+        ensure_private_signet(self.app.node.network())?;
+        let now = unix_time_secs();
+        let anchors = self
+            .app
+            .node
+            .get_active_peers()
+            .into_iter()
+            .map(|peer| {
+                FlorestaUtreexoAnchor::from_socket_addr(peer.address, now)
+            })
+            .collect();
+        Ok(anchors)
+    }
+
+    async fn private_signet_utreexo_peer_source(
+        &self,
+        peer: SocketAddr,
+    ) -> RpcResult<FlorestaUtreexoPeerSource> {
+        ensure_private_signet(self.app.network)?;
+        if peer.ip().is_unspecified() {
+            return Err(custom_err_msg(format!(
+                "private signet Utreexo peer address must be externally reachable; got {peer}"
+            )));
+        }
+        let advertised_rpc_addr = advertised_addr(
+            SocketAddr::new(
+                self.app
+                    .rpc_url
+                    .host_str()
+                    .and_then(|host| host.parse().ok())
+                    .unwrap_or(peer.ip()),
+                self.app.rpc_url.port_or_known_default().unwrap_or(80),
+            ),
+            peer.ip(),
+        );
+        let advertised_bitassets_p2p_addr =
+            advertised_addr(self.app.net_addr, peer.ip());
+        let advertised_lite_wallet_quic_addr =
+            advertised_addr(self.app.lite_wallet_quic_addr, peer.ip());
+        Ok(FlorestaUtreexoPeerSource {
+            network: "signet".to_string(),
+            anchor: FlorestaUtreexoAnchor::from_socket_addr(
+                peer,
+                unix_time_secs(),
+            ),
+            services: FLORESTA_UTREEXO_ANCHOR_SERVICES,
+            service_names: vec![
+                "NODE_NETWORK_LIMITED".to_string(),
+                "NODE_WITNESS".to_string(),
+                "UTREEXO".to_string(),
+            ],
+            bitassets_rpc_url: format!("http://{advertised_rpc_addr}/"),
+            bitassets_p2p_addr: advertised_bitassets_p2p_addr.to_string(),
+            lite_wallet_quic_addr: advertised_lite_wallet_quic_addr.to_string(),
+        })
     }
 
     async fn list_utxos(
@@ -1669,4 +1780,122 @@ mod tests {
         assert!(err.to_string().contains("resync from snapshot"));
         assert!(err.to_string().contains("height is no longer available"));
     }
+}
+
+// === cusf.sidechain.v1.SidechainService gRPC server (BitWindow compatibility) ===
+
+#[derive(Clone)]
+struct SidechainGrpcImpl {
+    app: App,
+}
+
+fn sidechain_sequence_id(app: &App) -> u64 {
+    app.node
+        .try_get_tip_height()
+        .ok()
+        .flatten()
+        .map(u64::from)
+        .unwrap_or_default()
+}
+
+fn sidechain_block_header_info(app: &App) -> Option<BlockHeaderInfo> {
+    let tip_hash = app.node.try_get_tip().ok().flatten()?;
+    let height = app.node.try_get_tip_height().ok().flatten()?;
+    let header = app.node.get_header(tip_hash).ok()?;
+    Some(BlockHeaderInfo {
+        block_hash: tip_hash.into(),
+        prev_block_hash: header.prev_side_hash.map(Vec::from).unwrap_or_default(),
+        prev_main_block_hash: header.prev_main_hash.as_byte_array().to_vec(),
+        height,
+    })
+}
+
+#[tonic::async_trait]
+impl SidechainService for SidechainGrpcImpl {
+    async fn get_mempool_txs(
+        &self,
+        _req: Request<GetMempoolTxsRequest>,
+    ) -> Result<Response<GetMempoolTxsResponse>, Status> {
+        Ok(Response::new(GetMempoolTxsResponse {
+            sequence_id: Some(SequenceId {
+                sequence_id: sidechain_sequence_id(&self.app),
+            }),
+        }))
+    }
+
+    async fn get_utxos(
+        &self,
+        _req: Request<GetUtxosRequest>,
+    ) -> Result<Response<GetUtxosResponse>, Status> {
+        self.app.node.get_all_utxos().map_err(|err| {
+            Status::internal(format!("failed to read BitAssets UTXOs: {err:#}"))
+        })?;
+        Ok(Response::new(GetUtxosResponse {}))
+    }
+
+    async fn submit_transaction(
+        &self,
+        req: Request<SubmitTransactionRequest>,
+    ) -> Result<Response<SubmitTransactionResponse>, Status> {
+        let transaction = borsh::from_slice(&req.into_inner().transaction)
+            .map_err(|err| Status::invalid_argument(format!(
+                "failed to decode BitAssets authorized transaction: {err}"
+            )))?;
+        self.app.node.submit_transaction(transaction).map_err(|err| {
+            Status::invalid_argument(format!(
+                "failed to submit BitAssets transaction: {err:#}"
+            ))
+        })?;
+        Ok(Response::new(SubmitTransactionResponse {}))
+    }
+
+    type SubscribeEventsStream =
+        Pin<Box<dyn Stream<Item = Result<SubscribeEventsResponse, Status>> + Send + 'static>>;
+
+    async fn subscribe_events(
+        &self,
+        _req: Request<SubscribeEventsRequest>,
+    ) -> Result<Response<Self::SubscribeEventsStream>, Status> {
+        let sequence_id = sidechain_sequence_id(&self.app);
+        let header_info = sidechain_block_header_info(&self.app);
+        let event = header_info.map(|header_info| {
+            sidechain::subscribe_events_response::Event {
+                event: Some(
+                    sidechain::subscribe_events_response::event::Event::ConnectBlock(
+                        sidechain::subscribe_events_response::event::ConnectBlock {
+                            header_info: Some(header_info),
+                            block_info: Some(BlockInfo {}),
+                        },
+                    ),
+                ),
+            }
+        });
+        let s = stream::once(async move {
+            Ok(SubscribeEventsResponse {
+                sequence_id: Some(SequenceId { sequence_id }),
+                event,
+            })
+        });
+        Ok(Response::new(Box::pin(s)))
+    }
+}
+
+/// Start the SidechainService gRPC server so BitWindow can connect (localhost:50052 by default).
+pub async fn run_sidechain_grpc_server(
+    app: App,
+    addr: std::net::SocketAddr,
+) -> anyhow::Result<()> {
+    let svc = SidechainServiceServer::new(SidechainGrpcImpl { app });
+    // Health service so clients can discover readiness
+    let (health_reporter, health_server) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<SidechainServiceServer<SidechainGrpcImpl>>()
+        .await;
+
+    tonic::transport::Server::builder()
+        .add_service(health_server)
+        .add_service(svc)
+        .serve(addr)
+        .await?;
+    Ok(())
 }

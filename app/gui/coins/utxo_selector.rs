@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use eframe::egui;
-use plain_bitassets::types::{
+use sidechain_utilities::types::{
     AssetId, AssetOutputContent, BitcoinOutput, BitcoinOutputContent,
     FilledOutput, OutPoint, Output, Transaction, WithdrawalOutputContent,
 };

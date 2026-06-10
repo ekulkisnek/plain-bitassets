@@ -16,7 +16,7 @@ use bip300301_enforcer_integration_tests::{
 use futures::{
     FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
 };
-use plain_bitassets::{
+use sidechain_utilities::{
     authorization::{Dst, Signature},
     types::{Address, BitAssetData, BitAssetId, GetAddress as _, Txid},
 };

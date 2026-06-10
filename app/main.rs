@@ -121,7 +121,7 @@ fn set_tracing_subscriber(
                 "h2::codec::framed_write",
                 saturating_pred_level(saturating_pred_level(log_level)),
             ),
-            ("plain_bitassets", log_level),
+            ("sidechain_utilities", log_level),
             ("plain_bitassets_app", log_level),
             (
                 "tower::buffer::worker",
@@ -230,6 +230,17 @@ fn main() -> anyhow::Result<()> {
                 .await
                 {
                     tracing::error!("{err:#}");
+                }
+            }
+        });
+        // BitWindow / CUSF SidechainService gRPC (proxies to elementsd)
+        app.runtime.spawn({
+            let app = app.clone();
+            let addr = config.sidechain_grpc_addr;
+            async move {
+                tracing::info!(%addr, "starting SidechainService gRPC (for BitWindow)");
+                if let Err(err) = rpc_server::run_sidechain_grpc_server(app, addr).await {
+                    tracing::error!("sidechain gRPC server error: {err:#}");
                 }
             }
         });

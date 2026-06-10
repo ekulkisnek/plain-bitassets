@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use libes::key::conversion::PublicKeyFrom;
-use plain_bitassets::types::{EncryptionPubKey, keys::Ecies};
+use sidechain_utilities::types::{EncryptionPubKey, keys::Ecies};
 
 use crate::{
     app::App,

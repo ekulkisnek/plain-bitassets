@@ -1,12 +1,14 @@
 use std::{
+    fs,
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
     time::Duration,
 };
 
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitassets::{
+use sidechain_utilities::{
     authorization::{Dst, Signature},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
@@ -14,7 +16,7 @@ use plain_bitassets::{
         VerifyingKey,
     },
 };
-use plain_bitassets_app_rpc_api::RpcClient;
+use plain_bitassets_app_rpc_api::RpcClient as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
 
@@ -113,6 +115,29 @@ pub enum Command {
     ForgetPeer {
         addr: SocketAddr,
     },
+    /// Export private-signet Floresta-compatible Utreexo peer anchors.
+    #[command(name = "export-private-signet-utreexo-anchors")]
+    ExportPrivateSignetUtreexoAnchors {
+        /// Explicit private-signet Bitcoin P2P Utreexo peer address. Can be repeated.
+        #[arg(long = "peer")]
+        peers: Vec<SocketAddr>,
+        /// Use currently active private-signet BitAssets peers as anchor addresses.
+        #[arg(long)]
+        active: bool,
+        /// Write JSON to this path, for example a Floresta data-dir anchors.json.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Advertise this BitAssets node as a private-signet Floresta Utreexo peer source.
+    #[command(name = "private-signet-utreexo-peer-source")]
+    PrivateSignetUtreexoPeerSource {
+        /// Externally reachable Bitcoin P2P Utreexo peer address Floresta should anchor.
+        #[arg(long)]
+        peer: SocketAddr,
+        /// Write JSON to this path.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Format a deposit address
     FormatDepositAddress {
         address: Address,
@@ -145,7 +170,7 @@ pub enum Command {
     GetBlockcount,
     /// Get mainchain blocks that commit to a specified block hash
     GetBmmInclusions {
-        block_hash: plain_bitassets::types::BlockHash,
+        block_hash: sidechain_utilities::types::BlockHash,
     },
     /// Get a new address
     GetNewAddress,
@@ -430,6 +455,46 @@ where
         Command::ForgetPeer { addr } => {
             rpc_client.forget_peer(addr).await?;
             String::default()
+        }
+        Command::ExportPrivateSignetUtreexoAnchors {
+            peers,
+            active,
+            output,
+        } => {
+            if active && !peers.is_empty() {
+                anyhow::bail!(
+                    "use either --active or explicit --peer values, not both"
+                );
+            }
+            if !active && peers.is_empty() {
+                anyhow::bail!(
+                    "provide at least one --peer address or pass --active"
+                );
+            }
+
+            let anchors = if active {
+                rpc_client.private_signet_active_utreexo_anchors().await?
+            } else {
+                rpc_client.private_signet_utreexo_anchors(peers).await?
+            };
+            let json = format!("{}\n", serde_json::to_string_pretty(&anchors)?);
+            if let Some(output) = output {
+                fs::write(output, json)?;
+                String::default()
+            } else {
+                json
+            }
+        }
+        Command::PrivateSignetUtreexoPeerSource { peer, output } => {
+            let source =
+                rpc_client.private_signet_utreexo_peer_source(peer).await?;
+            let json = format!("{}\n", serde_json::to_string_pretty(&source)?);
+            if let Some(output) = output {
+                fs::write(output, json)?;
+                String::default()
+            } else {
+                json
+            }
         }
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?
